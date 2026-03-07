@@ -28,11 +28,13 @@ import Books from './pages/Books';
 import BooksCallback from './pages/BooksCallback';
 
 // EMPOWISE CONTRACTOR ROUTES (New)
+import ContractorOnboarding from './pages/ContractorOnboarding';
 import Tenders from './pages/Tenders';
 import Contracts from './pages/Contracts';
 import ComplianceVault from './pages/ComplianceVault';
 import MilestoneVerification from './pages/MilestoneVerification';
 import ProfessionalDirectory from './pages/ProfessionalDirectory';
+import SystemStatus from './pages/SystemStatus';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -183,6 +185,16 @@ function App() {
         {/* EMPOWISE CONTRACTOR PLATFORM ROUTES (NEW) */}
         {/* ============================================================================ */}
 
+        {/* Onboarding - First time contractor setup */}
+        <Route
+          path="/onboarding"
+          element={
+            <ProtectedRoute>
+              <ContractorOnboarding />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Tenders & Bidding */}
         <Route
           path="/tenders"
@@ -237,6 +249,16 @@ function App() {
           element={
             <ProtectedRoute>
               <Media />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* System Status (for testing/debugging) */}
+        <Route
+          path="/system-status"
+          element={
+            <ProtectedRoute>
+              <SystemStatus />
             </ProtectedRoute>
           }
         />

@@ -1,339 +1,439 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Calendar, DollarSign, CheckCircle, Clock, AlertCircle, ChevronRight, Plus } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { Loader, Plus, FileText, DollarSign, Calendar, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import ContractCreationForm from '../components/ContractCreationForm';
+import MilestoneCreationForm from '../components/MilestoneCreationForm';
+import PhotoLockUploadForm from '../components/PhotoLockUploadForm';
 
 interface Contract {
   id: string;
-  tender_id: string;
-  contractor_id: string;
+  contract_number: string;
   client_name: string;
-  total_amount: number;
-  currency: string;
-  start_date: string;
-  end_date: string;
-  status: 'active' | 'completed' | 'on_hold';
-  zoho_project_id: string;
-  created_at: string;
-}
-
-interface Milestone {
-  id: string;
-  contract_id: string;
-  milestone_name: string;
-  percentage: number;
-  amount_ugx: number;
-  status: 'pending' | 'verified' | 'paid';
-  due_date: string;
-  zoho_invoice_id: string;
+  contract_amount: number;
+  currency_code: string;
+  contract_start_date: string;
+  contract_end_date: string;
+  status: string;
+  milestones?: any[];
 }
 
 export default function Contracts() {
   const { user } = useAuth();
-  const [contracts, setContracts] = useState<Contract[]>([]);
-  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
-  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'active' | 'completed' | 'on_hold' | 'all'>('active');
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  const [contractorId, setContractorId] = useState<string | null>(null);
+  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showMilestoneForm, setShowMilestoneForm] = useState(false);
+  const [showPhotoUpload, setShowPhotoUpload] = useState(false);
+  const [selectedMilestone, setSelectedMilestone] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchContracts();
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (selectedContract) {
-      fetchMilestones(selectedContract.id);
+    if (user) {
+      fetchContractorAndContracts();
     }
-  }, [selectedContract]);
+  }, [user]);
 
-  const fetchContracts = async () => {
+  const fetchContractorAndContracts = async () => {
+    if (!user) return;
+    setLoading(true);
+
     try {
-      setLoading(true);
-      const { data, error } = await supabase
+      // Get contractor ID
+      const { data: profileData, error: profileError } = await supabase
+        .from('contractor_profiles')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (profileError) throw profileError;
+      setContractorId(profileData.id);
+
+      // Get contracts
+      const { data: contractsData, error: contractsError } = await supabase
         .from('contracts')
         .select('*')
-        .eq('contractor_id', user?.id)
-        .order('created_at', { ascending: false });
+        .eq('contractor_id', profileData.id)
+        .order('contract_start_date', { ascending: false });
 
-      if (error) throw error;
-      setContracts(data || []);
-      if (data && data.length > 0) {
-        setSelectedContract(data[0]);
-      }
-    } catch (error) {
-      console.error('Error fetching contracts:', error);
+      if (contractsError) throw contractsError;
+
+      // Fetch milestones for each contract
+      const contractsWithMilestones = await Promise.all(
+        (contractsData || []).map(async (contract) => {
+          const { data: milestonesData } = await supabase
+            .from('contract_milestones')
+            .select('*')
+            .eq('contract_id', contract.id)
+            .order('milestone_number', { ascending: true });
+
+          return {
+            ...contract,
+            milestones: milestonesData || [],
+          };
+        })
+      );
+
+      setContracts(contractsWithMilestones);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load contracts');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchMilestones = async (contractId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('contract_milestones')
-        .select('*')
-        .eq('contract_id', contractId)
-        .order('due_date', { ascending: true });
-
-      if (error) throw error;
-      setMilestones(data || []);
-    } catch (error) {
-      console.error('Error fetching milestones:', error);
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'active':
+        return 'bg-green-100 text-green-800';
+      case 'completed':
+        return 'bg-blue-100 text-blue-800';
+      case 'on_hold':
+        return 'bg-yellow-100 text-yellow-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
     }
   };
 
-  const getFilteredContracts = () => {
-    if (filter === 'all') return contracts;
-    return contracts.filter((c) => c.status === filter);
+  const getMilestoneStatusIcon = (status: string) => {
+    switch (status) {
+      case 'paid':
+        return <CheckCircle className="w-5 h-5 text-green-600" />;
+      case 'invoiced':
+        return <Clock className="w-5 h-5 text-blue-600" />;
+      case 'photo_verified':
+        return <AlertCircle className="w-5 h-5 text-yellow-600" />;
+      default:
+        return <Clock className="w-5 h-5 text-gray-400" />;
+    }
   };
 
-  const formatCurrency = (amount: number, currency: string = 'UGX') => {
-    return new Intl.NumberFormat('en-UG', {
-      style: 'currency',
-      currency: currency,
-      minimumFractionDigits: 0,
-    }).format(amount);
+  const calculateContractProgress = (milestones: any[]) => {
+    if (!milestones.length) return 0;
+    const paid = milestones.filter(m => m.status === 'paid').length;
+    return (paid / milestones.length) * 100;
   };
 
-  const getStatusColor = (status: string) => {
-    const colors = {
-      active: 'bg-green-100 text-green-800',
-      completed: 'bg-blue-100 text-blue-800',
-      on_hold: 'bg-yellow-100 text-yellow-800',
-    };
-    return colors[status as keyof typeof colors] || colors.active;
-  };
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading your contracts...</p>
+        </div>
+      </div>
+    );
+  }
 
-  const getMilestoneProgress = () => {
-    if (milestones.length === 0) return 0;
-    const completed = milestones.filter((m) => m.status === 'paid').length;
-    return (completed / milestones.length) * 100;
-  };
+  if (showCreateForm && contractorId) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-4xl mx-auto">
+          <button
+            onClick={() => setShowCreateForm(false)}
+            className="mb-6 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
+          >
+            ← Back to Contracts
+          </button>
+          <ContractCreationForm
+            contractorId={contractorId}
+            onSuccess={() => {
+              setShowCreateForm(false);
+              fetchContractorAndContracts();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
-  const getTotalMilestoneAmount = () => {
-    return milestones.reduce((sum, m) => sum + m.amount_ugx, 0);
-  };
+  if (selectedContract && !showMilestoneForm && !showPhotoUpload) {
+    const progress = calculateContractProgress(selectedContract.milestones || []);
+    const totalPaid = (selectedContract.milestones || [])
+      .filter(m => m.status === 'paid')
+      .reduce((sum, m) => sum + (m.amount_ugx || 0), 0);
 
-  const getMilestonePaidAmount = () => {
-    return milestones
-      .filter((m) => m.status === 'paid')
-      .reduce((sum, m) => sum + m.amount_ugx, 0);
-  };
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-6xl mx-auto">
+          <button
+            onClick={() => setSelectedContract(null)}
+            className="mb-6 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
+          >
+            ← Back to Contracts
+          </button>
 
-  const filteredContracts = getFilteredContracts();
+          <div className="bg-white rounded-lg shadow-lg p-8 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-800 mb-2">{selectedContract.contract_number}</h1>
+                <p className="text-gray-600">{selectedContract.client_name}</p>
+              </div>
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 py-8">
-      <div className="max-w-7xl mx-auto px-4">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900 mb-2">My Contracts</h1>
-              <p className="text-slate-600">
-                Manage your active contracts, milestones, and payments
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Contract Amount</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {selectedContract.currency_code} {selectedContract.contract_amount.toLocaleString()}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Status</p>
+                <span className={`inline-block px-3 py-1 rounded-full font-semibold ${getStatusColor(selectedContract.status)}`}>
+                  {selectedContract.status.charAt(0).toUpperCase() + selectedContract.status.slice(1)}
+                </span>
+              </div>
+            </div>
+
+            {/* Contract Progress */}
+            <div className="mb-8">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-semibold text-gray-800">Contract Progress</h3>
+                <span className="text-sm font-bold text-blue-600">{progress.toFixed(0)}% Complete</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className="bg-gradient-to-r from-green-500 to-blue-600 h-3 rounded-full transition-all"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              <p className="text-xs text-gray-600 mt-2">
+                Amount Paid: {selectedContract.currency_code} {totalPaid.toLocaleString()}
               </p>
             </div>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-lg flex items-center transition-colors">
-              <Plus size={20} className="mr-2" />
-              New Contract
-            </button>
-          </div>
-        </div>
 
-        {/* Filter Tabs */}
-        <div className="flex gap-2 mb-8">
-          {(['active', 'completed', 'on_hold', 'all'] as const).map((status) => (
-            <button
-              key={status}
-              onClick={() => setFilter(status)}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                filter === status
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              {status === 'on_hold' ? 'On Hold' : status.charAt(0).toUpperCase() + status.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Contracts List */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <div className="p-6 border-b border-slate-200">
-                <h2 className="text-lg font-bold text-slate-900">
-                  Contracts ({filteredContracts.length})
-                </h2>
+            {/* Dates */}
+            <div className="grid grid-cols-2 gap-6 mb-8 p-4 bg-gray-50 rounded-lg">
+              <div>
+                <p className="text-sm text-gray-600 mb-1">Start Date</p>
+                <p className="font-semibold text-gray-800">
+                  {new Date(selectedContract.contract_start_date).toLocaleDateString()}
+                </p>
               </div>
-              <div className="divide-y divide-slate-200 max-h-96 overflow-y-auto">
-                {loading ? (
-                  <div className="p-6 text-center">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-                  </div>
-                ) : filteredContracts.length === 0 ? (
-                  <div className="p-6 text-center text-slate-500">
-                    No contracts found
-                  </div>
-                ) : (
-                  filteredContracts.map((contract) => (
-                    <button
-                      key={contract.id}
-                      onClick={() => setSelectedContract(contract)}
-                      className={`w-full text-left p-4 hover:bg-slate-50 transition-colors border-l-4 ${
-                        selectedContract?.id === contract.id
-                          ? 'border-l-blue-600 bg-blue-50'
-                          : 'border-l-slate-200'
-                      }`}
-                    >
-                      <p className="font-semibold text-slate-900">{contract.client_name}</p>
-                      <p className="text-sm text-slate-600 mt-1">
-                        {formatCurrency(contract.total_amount, contract.currency)}
-                      </p>
-                      <span className={`inline-block px-2 py-1 rounded text-xs font-medium mt-2 ${getStatusColor(contract.status)}`}>
-                        {contract.status.charAt(0).toUpperCase() + contract.status.slice(1)}
-                      </span>
-                    </button>
-                  ))
-                )}
+              <div>
+                <p className="text-sm text-gray-600 mb-1">End Date</p>
+                <p className="font-semibold text-gray-800">
+                  {new Date(selectedContract.contract_end_date).toLocaleDateString()}
+                </p>
               </div>
             </div>
           </div>
 
-          {/* Contract Details and Milestones */}
-          <div className="lg:col-span-2">
-            {selectedContract ? (
-              <div className="space-y-6">
-                {/* Contract Header */}
-                <div className="bg-white rounded-lg shadow-md p-6">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900">{selectedContract.client_name}</h2>
-                      <p className="text-slate-600 mt-1">Contract ID: {selectedContract.id}</p>
-                    </div>
-                    <span className={`px-4 py-2 rounded-lg font-medium ${getStatusColor(selectedContract.status)}`}>
-                      {selectedContract.status.charAt(0).toUpperCase() + selectedContract.status.slice(1)}
-                    </span>
-                  </div>
+          {/* Milestones Section */}
+          <div className="bg-white rounded-lg shadow-lg p-8">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-800">Milestones</h2>
+              <button
+                onClick={() => setShowMilestoneForm(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition"
+              >
+                <Plus className="w-4 h-4" />
+                Add Milestone
+              </button>
+            </div>
 
-                  <div className="grid grid-cols-2 gap-4 mt-6">
-                    <div>
-                      <p className="text-sm text-slate-600 mb-1">Total Contract Value</p>
-                      <p className="text-2xl font-bold text-blue-600">
-                        {formatCurrency(selectedContract.total_amount, selectedContract.currency)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-600 mb-1">Contract Duration</p>
-                      <p className="text-lg font-semibold text-slate-900">
-                        {new Date(selectedContract.start_date).toLocaleDateString()} to{' '}
-                        {new Date(selectedContract.end_date).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Milestones Progress */}
-                <div className="bg-white rounded-lg shadow-md p-6">
-                  <h3 className="text-lg font-bold text-slate-900 mb-4">Milestones & Payments</h3>
-
-                  {milestones.length === 0 ? (
-                    <p className="text-slate-600">No milestones created yet</p>
-                  ) : (
-                    <>
-                      {/* Progress Bar */}
-                      <div className="mb-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-sm font-medium text-slate-700">Overall Progress</p>
-                          <p className="text-sm font-bold text-blue-600">{Math.round(getMilestoneProgress())}%</p>
-                        </div>
-                        <div className="w-full bg-slate-200 rounded-full h-3">
-                          <div
-                            className="bg-blue-600 h-3 rounded-full transition-all"
-                            style={{ width: `${getMilestoneProgress()}%` }}
-                          ></div>
-                        </div>
-                      </div>
-
-                      {/* Payment Summary */}
-                      <div className="grid grid-cols-2 gap-4 mb-6 p-4 bg-slate-50 rounded-lg">
+            {(selectedContract.milestones || []).length > 0 ? (
+              <div className="space-y-4">
+                {selectedContract.milestones?.map((milestone, idx) => (
+                  <div key={milestone.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-start gap-3">
+                        {getMilestoneStatusIcon(milestone.status)}
                         <div>
-                          <p className="text-xs text-slate-600 mb-1">Paid</p>
-                          <p className="text-lg font-bold text-green-600">
-                            {formatCurrency(getMilestonePaidAmount())}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-600 mb-1">Total Milestones</p>
-                          <p className="text-lg font-bold text-slate-900">
-                            {formatCurrency(getTotalMilestoneAmount())}
-                          </p>
+                          <h4 className="font-semibold text-gray-800">{milestone.milestone_name}</h4>
+                          <p className="text-sm text-gray-600">{milestone.description}</p>
                         </div>
                       </div>
+                      <span className={`text-sm font-semibold px-3 py-1 rounded ${
+                        milestone.status === 'paid' ? 'bg-green-100 text-green-800' :
+                        milestone.status === 'invoiced' ? 'bg-blue-100 text-blue-800' :
+                        milestone.status === 'photo_verified' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {milestone.status}
+                      </span>
+                    </div>
 
-                      {/* Milestones List */}
-                      <div className="space-y-3">
-                        {milestones.map((milestone) => (
-                          <div
-                            key={milestone.id}
-                            className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-                          >
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                {milestone.status === 'paid' ? (
-                                  <CheckCircle className="text-green-600" size={20} />
-                                ) : milestone.status === 'verified' ? (
-                                  <Clock className="text-blue-600" size={20} />
-                                ) : (
-                                  <AlertCircle className="text-yellow-600" size={20} />
-                                )}
-                                <p className="font-semibold text-slate-900">{milestone.milestone_name}</p>
-                              </div>
-                              <div className="flex items-center gap-4 mt-2 text-sm text-slate-600">
-                                <span className="inline-block px-2 py-1 bg-slate-100 rounded text-xs font-medium">
-                                  {milestone.percentage}%
-                                </span>
-                                <span className="flex items-center">
-                                  <Calendar size={14} className="mr-1" />
-                                  Due: {new Date(milestone.due_date).toLocaleDateString()}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="text-right ml-4">
-                              <p className="text-lg font-bold text-slate-900">
-                                {formatCurrency(milestone.amount_ugx)}
-                              </p>
-                              <p className={`text-xs font-medium mt-1 ${
-                                milestone.status === 'paid'
-                                  ? 'text-green-600'
-                                  : milestone.status === 'verified'
-                                  ? 'text-blue-600'
-                                  : 'text-yellow-600'
-                              }`}>
-                                {milestone.status.charAt(0).toUpperCase() + milestone.status.slice(1)}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                    <div className="grid grid-cols-3 gap-4 text-sm mb-3">
+                      <div>
+                        <p className="text-gray-600">Amount</p>
+                        <p className="font-semibold text-gray-800">
+                          {milestone.currency_code} {milestone.amount_ugx?.toLocaleString()}
+                        </p>
                       </div>
+                      <div>
+                        <p className="text-gray-600">Percentage</p>
+                        <p className="font-semibold text-gray-800">{milestone.percentage_of_contract}%</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Due Date</p>
+                        <p className="font-semibold text-gray-800">
+                          {new Date(milestone.due_date).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
 
-                      {/* Action Button */}
-                      <button className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center transition-colors">
+                    {milestone.status === 'pending' && (
+                      <button
+                        onClick={() => {
+                          setSelectedMilestone(milestone);
+                          setShowPhotoUpload(true);
+                        }}
+                        className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+                      >
                         Upload Proof of Work
-                        <ChevronRight size={16} className="ml-2" />
                       </button>
-                    </>
-                  )}
-                </div>
+                    )}
+                  </div>
+                ))}
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-md p-12 text-center">
-                <p className="text-slate-600 text-lg">Select a contract to view details</p>
-              </div>
+              <p className="text-gray-600 text-center py-8">No milestones yet. Add one to get started.</p>
             )}
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (showMilestoneForm && selectedContract && contractorId) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-4xl mx-auto">
+          <button
+            onClick={() => setShowMilestoneForm(false)}
+            className="mb-6 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
+          >
+            ← Back
+          </button>
+          <MilestoneCreationForm
+            contractId={selectedContract.id}
+            contractAmount={selectedContract.contract_amount}
+            onSuccess={() => {
+              setShowMilestoneForm(false);
+              fetchContractorAndContracts();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (showPhotoUpload && selectedMilestone && contractorId) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+        <div className="max-w-4xl mx-auto">
+          <button
+            onClick={() => setShowPhotoUpload(false)}
+            className="mb-6 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg transition"
+          >
+            ← Back
+          </button>
+          <PhotoLockUploadForm
+            milestoneId={selectedMilestone.id}
+            contractorId={contractorId}
+            onSuccess={() => {
+              setShowPhotoUpload(false);
+              fetchContractorAndContracts();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="mb-8 flex justify-between items-center">
+          <div>
+            <h1 className="text-4xl font-bold text-slate-900">My Contracts</h1>
+            <p className="text-gray-600 mt-2">Manage all your active and completed contracts</p>
+          </div>
+          <button
+            onClick={() => setShowCreateForm(true)}
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:shadow-lg text-white rounded-lg font-semibold transition"
+          >
+            <Plus className="w-5 h-5" />
+            New Contract
+          </button>
+        </div>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <p className="text-red-700">{error}</p>
+          </div>
+        )}
+
+        {/* Contracts Grid */}
+        {contracts.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {contracts.map((contract) => {
+              const progress = calculateContractProgress(contract.milestones || []);
+              return (
+                <div
+                  key={contract.id}
+                  onClick={() => setSelectedContract(contract)}
+                  className="bg-white rounded-lg shadow-md hover:shadow-xl transition cursor-pointer p-6 border border-gray-200"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <h3 className="text-lg font-bold text-gray-800">{contract.contract_number}</h3>
+                    <span className={`text-xs font-semibold px-2 py-1 rounded ${getStatusColor(contract.status)}`}>
+                      {contract.status}
+                    </span>
+                  </div>
+
+                  <p className="text-gray-600 mb-4">{contract.client_name}</p>
+
+                  <div className="mb-4">
+                    <p className="text-sm text-gray-600 mb-1">Amount</p>
+                    <p className="text-2xl font-bold text-blue-600">
+                      {contract.currency_code} {contract.contract_amount.toLocaleString()}
+                    </p>
+                  </div>
+
+                  <div className="mb-4">
+                    <p className="text-xs text-gray-600 mb-1">Progress</p>
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="bg-green-500 h-2 rounded-full"
+                        style={{ width: `${progress}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{progress.toFixed(0)}% • {contract.milestones?.length || 0} milestones</p>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs text-gray-600">
+                    <div className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {new Date(contract.contract_start_date).toLocaleDateString()}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <FileText className="w-3 h-3" />
+                      {contract.milestones?.filter(m => m.status === 'paid').length || 0}/{contract.milestones?.length || 0} paid
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="p-12 bg-white rounded-lg border-2 border-dashed border-gray-300 text-center">
+            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-gray-700 mb-2">No Contracts Yet</h3>
+            <p className="text-gray-600 mb-6">Create your first contract to start tracking work</p>
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+            >
+              Create Contract
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
