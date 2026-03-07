@@ -1,320 +1,431 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Crown, TrendingUp, Users, Star, Calendar, Briefcase, Play, Award, ArrowRight, Check } from 'lucide-react';
-import { useAuth, TIER_POINTS } from '../context/AuthContext';
-import { useUserStats } from '../hooks/useUserStats';
-import { useUserActivity } from '../hooks/useUserActivity';
-import { useChallenges } from '../hooks/useChallenges';
-import { useUpcomingEvents } from '../hooks/useUpcomingEvents';
-import { useReferralCode } from '../hooks/useReferralCode';
+import {
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  DollarSign,
+  FileText,
+  TrendingUp,
+  Plus,
+  ArrowRight,
+  Shield,
+  Users,
+  Calendar,
+  BarChart3,
+  Eye
+} from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+import type { ComplianceStatus, ContractStatus, FinancialSummary } from '../types/empowise';
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const { stats, changes, loading: statsLoading } = useUserStats();
-  const { activities } = useUserActivity(4);
-  const { challenges, loading: challengesLoading } = useChallenges();
-  const { events: upcomingEvents } = useUpcomingEvents(3);
-  const { referralCode, copyToClipboard } = useReferralCode();
-  const [copySuccess, setCopySuccess] = React.useState(false);
+  const [loading, setLoading] = useState(true);
+  const [complianceAlerts, setComplianceAlerts] = useState<ComplianceStatus[]>([]);
+  const [activeContracts, setActiveContracts] = useState<ContractStatus[]>([]);
+  const [financialData, setFinancialData] = useState<FinancialSummary | null>(null);
+  const [subscriptionTier, setSubscriptionTier] = useState('pro');
 
-  const getNextTier = () => {
-    if (!user) return null;
-    if (user.tier === 'free') return 'premium';
-    if (user.tier === 'premium') return 'professional';
-    if (user.tier === 'professional') return 'elite';
-    return null;
-  };
-
-  const nextTier = getNextTier();
-  const pointsNeeded = nextTier ? TIER_POINTS[nextTier as keyof typeof TIER_POINTS] - (stats?.loyalty_points || 0) : 0;
-
-  const formatChange = (value: number) => {
-    if (value === 0) return '0';
-    return value > 0 ? `+${value}` : `${value}`;
-  };
-
-  const getChangeColor = (value: number) => {
-    if (value > 0) return 'text-green-400';
-    if (value < 0) return 'text-red-400';
-    return 'text-gray-400';
-  };
-
-  const quickStats = [
-    {
-      label: 'Portfolio Views',
-      value: stats?.portfolio_views?.toLocaleString() || '0',
-      icon: <TrendingUp className="w-5 h-5" />,
-      change: formatChange(changes?.portfolio_views_change || 0),
-      changeColor: getChangeColor(changes?.portfolio_views_change || 0),
-      loading: false // Always display data, never show loading skeleton
-    },
-    {
-      label: 'Followers',
-      value: stats?.followers?.toLocaleString() || '0',
-      icon: <Users className="w-5 h-5" />,
-      change: formatChange(changes?.followers_change || 0),
-      changeColor: getChangeColor(changes?.followers_change || 0),
-      loading: false
-    },
-    {
-      label: 'Rating',
-      value: stats?.rating?.toFixed(1) || '0.0',
-      icon: <Star className="w-5 h-5" />,
-      change: formatChange(Math.round((changes?.rating_change || 0) * 10) / 10),
-      changeColor: getChangeColor(changes?.rating_change || 0),
-      loading: false
-    },
-    {
-      label: 'Loyalty Points',
-      value: stats?.loyalty_points?.toLocaleString() || '0',
-      icon: <Crown className="w-5 h-5" />,
-      change: formatChange(changes?.loyalty_points_change || 0),
-      changeColor: getChangeColor(changes?.loyalty_points_change || 0),
-      loading: false
+  useEffect(() => {
+    if (user) {
+      loadDashboardData();
     }
-  ];
+  }, [user]);
 
-  const formatActivityTime = (createdAt: string) => {
-    const date = new Date(createdAt);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
 
-    if (diffMins < 60) return `${diffMins} min${diffMins !== 1 ? 's' : ''} ago`;
-    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
-    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-    return date.toLocaleDateString();
+      // Load compliance alerts (tax reminders)
+      const { data: reminders } = await supabase
+        .from('tax_reminders')
+        .select('*')
+        .eq('contractor_id', user?.id)
+        .order('expiry_date', { ascending: true })
+        .limit(5);
+
+      if (reminders) {
+        const alerts = reminders.map(reminder => {
+          const expiryDate = new Date(reminder.expiry_date);
+          const today = new Date();
+          const daysLeft = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+          return {
+            reminder_type: reminder.reminder_type,
+            document_name: reminder.document_name,
+            expiry_date: reminder.expiry_date,
+            status: daysLeft <= 7 ? 'critical' : daysLeft <= 30 ? 'warning' : 'ok',
+            days_until_expiry: daysLeft
+          } as ComplianceStatus;
+        });
+        setComplianceAlerts(alerts);
+      }
+
+      // Load active contracts
+      const { data: contracts } = await supabase
+        .from('contracts')
+        .select(`
+          id,
+          contract_number,
+          client_name,
+          contract_amount,
+          status,
+          contract_milestones (
+            id,
+            status
+          )
+        `)
+        .eq('contractor_id', user?.id)
+        .eq('status', 'active')
+        .limit(5);
+
+      if (contracts) {
+        const contractsData = contracts.map(contract => {
+          const milestones = (contract.contract_milestones || []) as any[];
+          const totalMilestones = milestones.length;
+          const completedMilestones = milestones.filter(m => m.status === 'paid').length;
+          const progress = totalMilestones > 0 ? Math.round((completedMilestones / totalMilestones) * 100) : 0;
+
+          return {
+            contract_id: contract.id,
+            contract_number: contract.contract_number,
+            client_name: contract.client_name,
+            total_amount: contract.contract_amount,
+            progress_percentage: progress,
+            active_milestones_count: totalMilestones - completedMilestones
+          } as ContractStatus;
+        });
+        setActiveContracts(contractsData);
+      }
+
+      // Mock financial data (will be replaced by Zoho Books integration)
+      setFinancialData({
+        current_month_income: 45000000, // UGX
+        current_month_expenses: 28000000,
+        net_profit: 17000000,
+        tax_owed: 2700000, // 6% withholding on income
+        net_payable: 14300000,
+        tax_filing_ready: true
+      });
+
+      // Load subscription tier
+      const { data: subscription } = await supabase
+        .from('contractor_subscriptions')
+        .select('tier')
+        .eq('contractor_id', user?.id)
+        .single();
+
+      if (subscription) {
+        setSubscriptionTier(subscription.tier);
+      }
+
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'critical':
+        return 'text-red-400 bg-red-950/30 border-red-500/20';
+      case 'warning':
+        return 'text-yellow-400 bg-yellow-950/30 border-yellow-500/20';
+      case 'ok':
+        return 'text-green-400 bg-green-950/30 border-green-500/20';
+      default:
+        return 'text-gray-400';
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'critical':
+        return <AlertTriangle className="w-5 h-5" />;
+      case 'warning':
+        return <Clock className="w-5 h-5" />;
+      case 'ok':
+        return <CheckCircle className="w-5 h-5" />;
+      default:
+        return null;
+    }
   };
 
   return (
-    <div className="min-h-screen pt-20 pb-12 px-4 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
+    <div className="min-h-screen pt-20 pb-12 px-4 bg-gradient-to-b from-slate-950 via-blue-950 to-slate-950">
       <div className="max-w-7xl mx-auto">
         {/* Welcome Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-playfair font-bold text-white mb-2">
-            Welcome back, <span className="gradient-text">{user?.name}</span>
+            Welcome back, <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-400">{user?.name}</span>
           </h1>
-          <p className="text-gray-300">Here's what's happening with your talent profile today.</p>
+          <p className="text-gray-300">Operations center for {subscriptionTier.toUpperCase()} contractors</p>
         </div>
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {quickStats.map((stat, index) => (
-            <div key={index} className="glass-effect p-6 rounded-xl hover-lift">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-rose-400">
-                  {stat.icon}
-                </div>
-                <span className={`${stat.changeColor} text-sm font-medium`}>{stat.change}</span>
+        {/* Quick Actions */}
+        <div className="mb-8 grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: 'Upload Doc', icon: <FileText className="w-5 h-5" />, to: '/compliance' },
+            { label: 'New Contract', icon: <Plus className="w-5 h-5" />, to: '/contracts' },
+            { label: 'Verify Work', icon: <CheckCircle className="w-5 h-5" />, to: '/contracts' },
+            { label: 'View Reports', icon: <BarChart3 className="w-5 h-5" />, to: '/books' },
+            { label: 'Browse Tenders', icon: <Eye className="w-5 h-5" />, to: '/tenders' }
+          ].map((action, index) => (
+            <Link
+              key={index}
+              to={action.to}
+              className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-blue-950/40 to-cyan-950/20 border border-blue-500/20 rounded-lg hover:border-blue-500/40 transition-all group"
+            >
+              <div className="text-blue-400 mb-2 group-hover:scale-110 transition-transform">
+                {action.icon}
               </div>
-              {stat.loading ? (
-                <div className="animate-pulse">
-                  <div className="h-8 bg-gray-700 rounded mb-1 w-16"></div>
-                  <div className="h-4 bg-gray-700 rounded w-20"></div>
-                </div>
-              ) : (
-                <>
-                  <div className="text-2xl font-bold text-white mb-1">{stat.value}</div>
-                  <div className="text-gray-400 text-sm">{stat.label}</div>
-                </>
-              )}
-            </div>
+              <span className="text-white text-xs font-medium text-center">{action.label}</span>
+            </Link>
           ))}
         </div>
 
-        <div className="grid lg:grid-cols-3 gap-8">
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Quick Actions */}
-            <div className="glass-effect p-6 rounded-xl">
-              <h2 className="text-xl font-semibold text-white mb-4">Quick Actions</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { label: 'Update Portfolio', icon: <Star className="w-5 h-5" />, to: '/portfolio' },
-                  { label: 'Add Content', icon: <Play className="w-5 h-5" />, to: '/content' },
-                  { label: 'Join Masterclass', icon: <Award className="w-5 h-5" />, to: '/masterclass' },
-                  { label: 'Browse Projects', icon: <Briefcase className="w-5 h-5" />, to: '/projects' }
-                ].map((action, index) => (
+        {loading ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="h-64 bg-blue-950/30 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Main Content - Left Side */}
+            <div className="lg:col-span-2 space-y-8">
+              {/* Compliance Alerts - CRITICAL */}
+              <div className="bg-gradient-to-br from-blue-950/40 to-cyan-950/20 border border-blue-500/20 rounded-2xl p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-semibold text-white flex items-center space-x-2">
+                    <Shield className="w-5 h-5 text-blue-400" />
+                    <span>Compliance Status</span>
+                  </h2>
                   <Link
-                    key={index}
-                    to={action.to}
-                    className="p-4 glass-effect rounded-lg hover:bg-white/10 transition-all text-center group"
+                    to="/compliance"
+                    className="text-blue-400 hover:text-blue-300 text-sm font-medium flex items-center space-x-1"
                   >
-                    <div className="text-rose-400 mb-2 flex justify-center group-hover:scale-110 transition-transform">
-                      {action.icon}
-                    </div>
-                    <div className="text-white text-sm font-medium">{action.label}</div>
+                    <span>View All</span>
+                    <ArrowRight className="w-4 h-4" />
                   </Link>
-                ))}
-              </div>
-            </div>
-
-            {/* Recent Activity */}
-            <div className="glass-effect p-6 rounded-xl">
-              <h2 className="text-xl font-semibold text-white mb-4">Recent Activity</h2>
-              {activities && activities.length > 0 ? (
-                <div className="space-y-3">
-                  {activities.map((activity) => (
-                    <div key={activity.id} className="flex items-center space-x-3 p-3 hover:bg-white/5 rounded-lg transition-colors">
-                      <div className={`w-2 h-2 rounded-full ${
-                        activity.action_type === 'update' ? 'bg-blue-400' :
-                        activity.action_type === 'follower' ? 'bg-green-400' :
-                        activity.action_type === 'approval' ? 'bg-yellow-400' : 'bg-purple-400'
-                      }`} />
-                      <div className="flex-1">
-                        <div className="text-white text-sm">{activity.action}</div>
-                        <div className="text-gray-400 text-xs">{formatActivityTime(activity.created_at)}</div>
-                      </div>
-                    </div>
-                  ))}
                 </div>
-              ) : (
-                <div className="text-center py-6">
-                  <p className="text-gray-400 text-sm">No recent activity yet. Start exploring!</p>
-                </div>
-              )}
-            </div>
 
-            {/* Upcoming Events */}
-            <div className="glass-effect p-6 rounded-xl">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-white">Upcoming Events</h2>
-                <Link to="/events" className="text-rose-400 hover:text-rose-300 transition-colors">
-                  View All
-                </Link>
-              </div>
-              {upcomingEvents && upcomingEvents.length > 0 ? (
-                <div className="space-y-3">
-                  {upcomingEvents.map((event) => {
-                    const eventDate = new Date(event.event_date);
-                    const dateString = eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                    return (
-                      <div key={event.id} className="flex items-center space-x-4 p-3 hover:bg-white/5 rounded-lg transition-colors">
-                        <Calendar className="w-5 h-5 text-rose-400 flex-shrink-0" />
-                        <div className="flex-1">
-                          <div className="text-white font-medium">{event.title}</div>
-                          <div className="text-gray-400 text-sm">{dateString} • {event.attendees_count} attending</div>
+                {complianceAlerts.length > 0 ? (
+                  <div className="space-y-3">
+                    {complianceAlerts.slice(0, 3).map((alert, index) => (
+                      <div
+                        key={index}
+                        className={`flex items-center space-x-4 p-4 rounded-lg border ${getStatusColor(alert.status)}`}
+                      >
+                        <div className="flex-shrink-0">
+                          {getStatusIcon(alert.status)}
                         </div>
-                        <ArrowRight className="w-4 h-4 text-gray-400" />
+                        <div className="flex-1">
+                          <div className="font-semibold text-white">{alert.document_name}</div>
+                          <div className="text-sm opacity-90">
+                            Expires: {new Date(alert.expiry_date).toLocaleDateString()}
+                            {alert.days_until_expiry <= 30 && (
+                              <span className="ml-2 font-bold">({alert.days_until_expiry} days left)</span>
+                            )}
+                          </div>
+                        </div>
+                        {alert.status === 'critical' && subscriptionTier === 'elite' && (
+                          <Link
+                            to="/compliance/renewals"
+                            className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded transition-colors"
+                          >
+                            Renew
+                          </Link>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="text-center py-6">
-                  <p className="text-gray-400 text-sm">No upcoming events at the moment.</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Membership Status */}
-            <div className="glass-effect p-6 rounded-xl">
-              <div className="text-center mb-4">
-                <Crown className="w-12 h-12 text-rose-400 mx-auto mb-2" />
-                <h3 className="text-lg font-semibold text-white capitalize">{user?.tier} Member</h3>
-                <p className="text-gray-400 text-sm">Since {user?.joined_date ? new Date(user.joined_date).toLocaleDateString() : 'recently'}</p>
-              </div>
-
-              {user?.tier === 'free' && stats ? (
-                <div className="mt-4">
-                  <div className="text-center text-sm text-gray-300 mb-2">
-                    You are {Math.max(0, pointsNeeded)} points away from {nextTier}!
+                    ))}
                   </div>
-                  <button className="w-full py-2 bg-gradient-to-r from-rose-500 to-purple-600 text-white font-medium rounded-lg hover:shadow-lg transition-all">
-                    Upgrade to Premium
-                  </button>
+                ) : (
+                  <div className="text-center py-8">
+                    <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-3" />
+                    <p className="text-green-400 font-semibold">All compliance documents valid</p>
+                    <p className="text-gray-400 text-sm mt-1">You're audit-ready</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Active Contracts */}
+              <div className="bg-gradient-to-br from-blue-950/40 to-cyan-950/20 border border-blue-500/20 rounded-2xl p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-xl font-semibold text-white flex items-center space-x-2">
+                    <FileText className="w-5 h-5 text-cyan-400" />
+                    <span>Active Contracts</span>
+                  </h2>
+                  <Link
+                    to="/contracts"
+                    className="text-cyan-400 hover:text-cyan-300 text-sm font-medium flex items-center space-x-1"
+                  >
+                    <span>View All</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
                 </div>
-              ) : null}
+
+                {activeContracts.length > 0 ? (
+                  <div className="space-y-4">
+                    {activeContracts.slice(0, 3).map((contract, index) => (
+                      <div key={index} className="p-4 bg-blue-900/20 border border-blue-500/20 rounded-lg hover:border-blue-500/40 transition-all">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <div className="font-semibold text-white">{contract.contract_number}</div>
+                            <div className="text-gray-400 text-sm">{contract.client_name}</div>
+                          </div>
+                          <Link
+                            to={`/contracts/${contract.contract_id}`}
+                            className="text-cyan-400 hover:text-cyan-300"
+                          >
+                            <ArrowRight className="w-5 h-5" />
+                          </Link>
+                        </div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-gray-300 text-sm">Progress</span>
+                          <span className="text-cyan-400 font-semibold">{contract.progress_percentage}%</span>
+                        </div>
+                        <div className="w-full bg-gray-700 rounded-full h-2">
+                          <div
+                            className="bg-gradient-to-r from-cyan-500 to-blue-500 h-2 rounded-full transition-all"
+                            style={{ width: `${contract.progress_percentage}%` }}
+                          />
+                        </div>
+                        <div className="text-gray-400 text-xs mt-2">
+                          {contract.active_milestones_count} milestones remaining
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <FileText className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                    <p className="text-gray-400">No active contracts</p>
+                    <Link
+                      to="/tenders"
+                      className="text-cyan-400 hover:text-cyan-300 text-sm font-medium mt-3 inline-flex items-center space-x-1"
+                    >
+                      <span>Browse tenders</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </Link>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Challenges */}
-            <div className="glass-effect p-6 rounded-xl">
-              <h3 className="text-lg font-semibold text-white mb-4">Active Challenges</h3>
-              {challengesLoading ? (
-                <div className="space-y-4">
-                  {[...Array(3)].map((_, i) => (
-                    <div key={i} className="space-y-2 animate-pulse">
-                      <div className="flex justify-between">
-                        <div className="h-4 bg-gray-700 rounded w-2/3"></div>
-                        <div className="h-4 bg-gray-700 rounded w-12"></div>
+            {/* Right Sidebar */}
+            <div className="space-y-8">
+              {/* Financial Health */}
+              {financialData && (
+                <div className="bg-gradient-to-br from-blue-950/40 to-cyan-950/20 border border-blue-500/20 rounded-2xl p-6">
+                  <h2 className="text-xl font-semibold text-white mb-6 flex items-center space-x-2">
+                    <TrendingUp className="w-5 h-5 text-green-400" />
+                    <span>Financial Health</span>
+                  </h2>
+
+                  <div className="space-y-4">
+                    {/* This Month */}
+                    <div>
+                      <div className="text-gray-400 text-sm mb-1">This Month Income</div>
+                      <div className="text-2xl font-bold text-green-400">
+                        UGX {(financialData.current_month_income / 1000000).toFixed(1)}M
                       </div>
-                      <div className="w-full bg-gray-700 rounded-full h-2"></div>
-                      <div className="h-3 bg-gray-700 rounded w-1/3"></div>
                     </div>
-                  ))}
-                </div>
-              ) : challenges && challenges.length > 0 ? (
-                <div className="space-y-4">
-                  {challenges.map((challenge) => (
-                    <div key={challenge.id} className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-white">{challenge.title}</span>
-                        <span className="text-gray-400">{challenge.progress}%</span>
+
+                    <div className="border-t border-blue-500/20 pt-4">
+                      <div className="text-gray-400 text-sm mb-1">Expenses</div>
+                      <div className="text-2xl font-bold text-orange-400">
+                        UGX {(financialData.current_month_expenses / 1000000).toFixed(1)}M
                       </div>
-                      <div className="w-full bg-gray-700 rounded-full h-2">
-                        <div
-                          className="bg-gradient-to-r from-rose-400 to-purple-500 h-2 rounded-full transition-all duration-300"
-                          style={{ width: `${challenge.progress}%` }}
-                        />
-                      </div>
-                      <div className="text-xs text-gray-400">Reward: {challenge.reward}</div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-6">
-                  <p className="text-gray-400 text-sm">No active challenges. Check back soon!</p>
+
+                    <div className="border-t border-blue-500/20 pt-4 bg-blue-900/30 -mx-6 px-6 py-4 rounded-lg">
+                      <div className="text-gray-400 text-sm mb-1">Net Profit</div>
+                      <div className="text-3xl font-bold text-cyan-400 mb-3">
+                        UGX {(financialData.net_profit / 1000000).toFixed(1)}M
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Margin: {((financialData.net_profit / financialData.current_month_income) * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                  </div>
+
+                  <Link
+                    to="/books"
+                    className="mt-6 w-full py-2 bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-semibold rounded-lg hover:shadow-lg transition-all text-center flex items-center justify-center space-x-2"
+                  >
+                    <DollarSign className="w-4 h-4" />
+                    <span>Full Reports</span>
+                  </Link>
                 </div>
               )}
-            </div>
 
-            {/* Referral */}
-            <div className="glass-effect p-6 rounded-xl">
-              <h3 className="text-lg font-semibold text-white mb-4">Invite Friends</h3>
-              <p className="text-gray-400 text-sm mb-4">
-                Earn 100 loyalty points for each friend who joins!
-              </p>
-              <div className="flex space-x-2">
-                <input
-                  type="text"
-                  value={referralCode || 'Loading...'}
-                  readOnly
-                  className="flex-1 px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-sm"
-                />
-                <button
-                  onClick={async () => {
-                    if (referralCode) {
-                      const success = await copyToClipboard(referralCode);
-                      if (success) {
-                        setCopySuccess(true);
-                        setTimeout(() => setCopySuccess(false), 2000);
-                      }
-                    }
-                  }}
-                  className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium flex items-center space-x-2 ${
-                    copySuccess
-                      ? 'bg-green-500 text-white'
-                      : 'bg-rose-500 text-white hover:bg-rose-600'
-                  }`}
-                >
-                  {copySuccess ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>Copied</span>
-                    </>
-                  ) : (
-                    'Copy'
+              {/* Tax Liability */}
+              {financialData && (
+                <div className="bg-gradient-to-br from-red-950/40 to-orange-950/20 border border-red-500/20 rounded-2xl p-6">
+                  <h2 className="text-xl font-semibold text-white mb-6 flex items-center space-x-2">
+                    <AlertTriangle className="w-5 h-5 text-red-400" />
+                    <span>Tax Overview</span>
+                  </h2>
+
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-gray-400 text-sm mb-1">Withholding Tax (6%)</div>
+                      <div className="text-2xl font-bold text-red-400">
+                        UGX {(financialData.tax_owed / 1000000).toFixed(1)}M
+                      </div>
+                    </div>
+
+                    <div className="border-t border-red-500/20 pt-4">
+                      <div className="text-gray-400 text-sm mb-1">Net Payable</div>
+                      <div className="text-2xl font-bold text-green-400">
+                        UGX {(financialData.net_payable / 1000000).toFixed(1)}M
+                      </div>
+                    </div>
+
+                    {financialData.tax_filing_ready && (
+                      <div className="bg-green-950/30 border border-green-500/20 rounded-lg p-3 mt-4">
+                        <div className="flex items-center space-x-2 text-green-400 font-semibold text-sm">
+                          <CheckCircle className="w-5 h-5" />
+                          <span>Filing Ready</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <Link
+                    to="/books"
+                    className="mt-6 w-full py-2 border border-red-500/30 text-red-400 hover:bg-red-500/10 font-semibold rounded-lg transition-all text-center"
+                  >
+                    Generate Tax Report
+                  </Link>
+                </div>
+              )}
+
+              {/* Subscription Status */}
+              <div className="bg-gradient-to-br from-purple-950/40 to-pink-950/20 border border-purple-500/20 rounded-2xl p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">Plan Status</h2>
+                <div className="text-center">
+                  <div className="inline-block px-4 py-2 bg-purple-600 rounded-full text-white font-semibold mb-3 capitalize">
+                    {subscriptionTier} Plan
+                  </div>
+                  <p className="text-gray-400 text-sm mb-4">
+                    {subscriptionTier === 'starter' && '1 contract, basic features'}
+                    {subscriptionTier === 'pro' && '5 contracts, all core features'}
+                    {subscriptionTier === 'elite' && 'Unlimited contracts, renewal service'}
+                  </p>
+                  {subscriptionTier !== 'elite' && (
+                    <button className="w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-lg hover:shadow-lg transition-all">
+                      Upgrade Now
+                    </button>
                   )}
-                </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
