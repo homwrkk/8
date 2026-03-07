@@ -28,10 +28,11 @@ import Books from './pages/Books';
 import BooksCallback from './pages/BooksCallback';
 
 // EMPOWISE CONTRACTOR ROUTES (New)
+import Tenders from './pages/Tenders';
+import Contracts from './pages/Contracts';
 import ComplianceVault from './pages/ComplianceVault';
 import MilestoneVerification from './pages/MilestoneVerification';
 import ProfessionalDirectory from './pages/ProfessionalDirectory';
-// Note: Tenders and WorksGallery reuse existing Projects and Media pages
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -182,22 +183,22 @@ function App() {
         {/* EMPOWISE CONTRACTOR PLATFORM ROUTES (NEW) */}
         {/* ============================================================================ */}
 
-        {/* Tenders & Bidding (uses Projects page) */}
+        {/* Tenders & Bidding */}
         <Route
           path="/tenders"
           element={
             <ProtectedRoute>
-              <Projects />
+              <Tenders />
             </ProtectedRoute>
           }
         />
 
-        {/* Contract Management - Milestone Verification (Photo-Lock) */}
+        {/* Contract Management - List and Details */}
         <Route
           path="/contracts"
           element={
             <ProtectedRoute>
-              <Projects /> {/* Shows list of contractor's contracts */}
+              <Contracts />
             </ProtectedRoute>
           }
         />
