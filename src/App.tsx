@@ -58,6 +58,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function ContractorProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const [contractorExists, setContractorExists] = useState<boolean | null>(null);
+  const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
     if (user && !loading) {
@@ -66,15 +67,17 @@ function ContractorProtectedRoute({ children }: { children: React.ReactNode }) {
   }, [user, loading]);
 
   const checkContractorProfile = async () => {
+    setIsChecking(true);
     const { data } = await supabase
       .from('contractor_profiles')
       .select('id')
       .eq('user_id', user?.id)
       .maybeSingle();
     setContractorExists(!!data);
+    setIsChecking(false);
   };
 
-  if (loading || contractorExists === null) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-slate-100 flex items-center justify-center">
         <div className="text-xl font-medium text-slate-700">Loading...</div>
@@ -84,6 +87,10 @@ function ContractorProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!user) {
     return <Navigate to="/signin" replace />;
+  }
+
+  if (contractorExists === null || isChecking) {
+    return <Navigate to="/onboarding" replace />;
   }
 
   if (!contractorExists) {
